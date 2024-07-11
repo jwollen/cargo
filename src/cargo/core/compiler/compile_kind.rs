@@ -5,7 +5,7 @@ use crate::util::errors::CargoResult;
 use crate::util::interning::InternedString;
 use crate::util::{try_canonicalize, GlobalContext, StableHasher};
 use anyhow::Context as _;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -103,6 +103,21 @@ impl serde::ser::Serialize for CompileKind {
     }
 }
 
+impl<'de> serde::de::Deserialize<'de> for CompileKind {
+    fn deserialize<D>(d: D) -> Result<CompileKind, D::Error>
+    where
+        D: serde::de::Deserializer<'de>,
+    {
+        let s = Option::<&str>::deserialize(d)?;
+        Ok(match s {
+            None => CompileKind::Host,
+            Some(s) => {
+                CompileKind::Target(CompileTarget::new(&s).map_err(serde::de::Error::custom)?)
+            }
+        })
+    }
+}
+
 /// Abstraction for the representation of a compilation target that Cargo has.
 ///
 /// Compilation targets are one of two things right now:
@@ -120,7 +135,7 @@ impl serde::ser::Serialize for CompileKind {
 /// like naming directories or looking up configuration keys we only check the
 /// file stem of JSON target files. For built-in rustc targets this is just an
 /// uninterpreted string basically.
-#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy, PartialOrd, Ord, Serialize)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct CompileTarget {
     name: InternedString,
 }

@@ -30,6 +30,19 @@ impl CrateType {
         }
     }
 
+    pub fn from_str(str: &str) -> CrateType {
+        match str {
+            "bin" => CrateType::Bin,
+            "lib" => CrateType::Lib,
+            "rlib" => CrateType::Rlib,
+            "dylib" => CrateType::Dylib,
+            "cdylib" => CrateType::Cdylib,
+            "staticlib" => CrateType::Staticlib,
+            "proc-macro" => CrateType::ProcMacro,
+            _ => CrateType::Other(str.to_string()),
+        }
+    }
+
     pub fn can_lto(&self) -> bool {
         match self {
             CrateType::Bin | CrateType::Staticlib | CrateType::Cdylib => true,
@@ -111,5 +124,15 @@ impl serde::Serialize for CrateType {
         S: serde::ser::Serializer,
     {
         self.to_string().serialize(s)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for CrateType {
+    fn deserialize<D>(d: D) -> Result<CrateType, D::Error>
+    where
+        D: serde::de::Deserializer<'de>,
+    {
+        let s = <&str>::deserialize(d)?;
+        Ok(CrateType::from_str(s))
     }
 }

@@ -37,6 +37,7 @@ use cargo_util_schemas::manifest::TomlTrimPathsValue;
 use cargo_util_schemas::manifest::{
     ProfilePackageSpec, StringOrBool, TomlDebugInfo, TomlProfile, TomlProfiles,
 };
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::Hash;
 use std::{cmp, fmt, hash};
@@ -592,7 +593,7 @@ fn merge_profile(profile: &mut Profile, toml: &TomlProfile) {
 /// This is currently only used for the `PROFILE` env var for build scripts
 /// for backwards compatibility. We should probably deprecate `PROFILE` and
 /// encourage using things like `DEBUG` and `OPT_LEVEL` instead.
-#[derive(Clone, Copy, Eq, PartialOrd, Ord, PartialEq, Debug)]
+#[derive(Clone, Copy, Eq, PartialOrd, Ord, PartialEq, Debug, Serialize, Deserialize)]
 pub enum ProfileRoot {
     Release,
     Debug,
@@ -600,11 +601,11 @@ pub enum ProfileRoot {
 
 /// Profile settings used to determine which compiler flags to use for a
 /// target.
-#[derive(Clone, Eq, PartialOrd, Ord, serde::Serialize)]
+#[derive(Clone, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Profile {
     pub name: InternedString,
     pub opt_level: InternedString,
-    #[serde(skip)] // named profiles are unstable
+    // TODO(jwollen): Make an option instead of: #[serde(skip)] // named profiles are unstable
     pub root: ProfileRoot,
     pub lto: Lto,
     // `None` means use rustc default.
@@ -760,7 +761,7 @@ impl Profile {
 /// cause to build a unit twice. By deferring the choice until we know
 /// whether to choose the optimized value or the default value, we can make sure
 /// the unit is only built once and the unit graph is still optimized.
-#[derive(Debug, Copy, Clone, serde::Serialize)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum DebugInfo {
     /// A debuginfo level that is fixed and will not change.
@@ -862,8 +863,22 @@ impl serde::ser::Serialize for Lto {
     }
 }
 
+impl<'de> serde::de::Deserialize<'de> for Lto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        match <&str>::deserialize(deserializer)? {
+            "off" => Ok(Lto::Off),
+            "true" => Ok(Lto::Bool(true)),
+            "false" => Ok(Lto::Bool(false)),
+            s => Ok(Lto::Named(InternedString::new(s))),
+        }
+    }
+}
+
 /// The `panic` setting.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, PartialOrd, Ord, serde::Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PanicStrategy {
     Unwind,
@@ -880,9 +895,7 @@ impl fmt::Display for PanicStrategy {
     }
 }
 
-#[derive(
-    Clone, Copy, PartialEq, Eq, Debug, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
-)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum StripInner {
     /// Don't remove any symbols
     None,
@@ -909,7 +922,7 @@ impl fmt::Display for StripInner {
 /// for optimization purposes: when no package being compiled requires debuginfo,
 /// then we can strip debuginfo to remove pre-existing debug symbols from the
 /// standard library.
-#[derive(Clone, Copy, Debug, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Strip {
     /// A strip option that is fixed and will not change.
@@ -966,7 +979,7 @@ impl Ord for Strip {
 ///
 /// This means these are passed down from the root of the dependency tree to apply
 /// to most child dependencies.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct UnitFor {
     /// A target for `build.rs` or any of its dependencies, or a proc-macro or
     /// any of its dependencies. This enables `build-override` profiles for
@@ -1044,7 +1057,8 @@ pub struct UnitFor {
 /// It also interacts with [`-Z panic-abort-tests`].
 ///
 /// [`-Z panic-abort-tests`]: https://doc.rust-lang.org/nightly/cargo/reference/unstable.html#panic-abort-tests
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 enum PanicSetting {
     /// Used to force a unit to always be compiled with the `panic=unwind`
     /// strategy, notably for build scripts, proc macros, etc.

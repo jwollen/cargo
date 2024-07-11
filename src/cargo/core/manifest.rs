@@ -9,8 +9,7 @@ use anyhow::Context as _;
 use cargo_util_schemas::manifest::RustVersion;
 use cargo_util_schemas::manifest::{TomlManifest, TomlProfiles};
 use semver::Version;
-use serde::ser;
-use serde::Serialize;
+use serde::{de, ser, Deserialize, Serialize};
 use url::Url;
 
 use crate::core::compiler::rustdoc::RustdocScrapeExamples;
@@ -157,20 +156,71 @@ pub enum TargetKind {
     CustomBuild,
 }
 
+#[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SerializedTargetKind {
+    Lib(Vec<CrateType>),
+    Bin,
+    Test,
+    Bench,
+    Example,
+    CustomBuild,
+}
+
+impl From<TargetKind> for SerializedTargetKind {
+    fn from(value: TargetKind) -> Self {
+        use SerializedTargetKind::*;
+        match value {
+            TargetKind::Lib(kinds) => Lib(kinds),
+            TargetKind::Bin => Bin,
+            TargetKind::Test => Test,
+            TargetKind::Bench => Bench,
+            TargetKind::ExampleBin | TargetKind::ExampleLib(_) => Example,
+            TargetKind::CustomBuild => CustomBuild,
+        }
+    }
+}
+
 impl ser::Serialize for TargetKind {
     fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
     where
         S: ser::Serializer,
     {
-        use self::TargetKind::*;
+        SerializedTargetKind::from(self.clone()).serialize(s)
+    }
+}
+
+impl ser::Serialize for SerializedTargetKind {
+    fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: ser::Serializer,
+    {
+        use SerializedTargetKind::*;
         match self {
             Lib(kinds) => s.collect_seq(kinds.iter().map(|t| t.to_string())),
             Bin => ["bin"].serialize(s),
-            ExampleBin | ExampleLib(_) => ["example"].serialize(s),
+            Example => ["example"].serialize(s),
             Test => ["test"].serialize(s),
             CustomBuild => ["custom-build"].serialize(s),
             Bench => ["bench"].serialize(s),
         }
+    }
+}
+
+impl<'de> de::Deserialize<'de> for SerializedTargetKind {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: de::Deserializer<'de>,
+    {
+        use SerializedTargetKind::*;
+        let kinds = Vec::<&str>::deserialize(deserializer)?;
+        Ok(match kinds.as_slice() {
+            ["bin"] => Bin,
+            ["test"] => Test,
+            ["custom-build"] => CustomBuild,
+            ["bench"] => Bench,
+            ["example"] => Example,
+            _ => Lib(kinds.into_iter().map(CrateType::from_str).collect()),
+        })
     }
 }
 
@@ -300,16 +350,16 @@ impl From<PathBuf> for TargetSourcePath {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct SerializedTarget<'a> {
     /// Is this a `--bin bin`, `--lib`, `--example ex`?
     /// Serialized as a list of strings for historical reasons.
-    kind: &'a TargetKind,
+    kind: SerializedTargetKind,
     /// Corresponds to `--crate-type` compiler attribute.
     /// See <https://doc.rust-lang.org/reference/linkage.html>
     crate_types: Vec<CrateType>,
     name: &'a str,
-    src_path: Option<&'a PathBuf>,
+    src_path: Option<&'a Path>,
     edition: &'a str,
     #[serde(rename = "required-features", skip_serializing_if = "Option::is_none")]
     required_features: Option<Vec<&'a str>>,
@@ -319,18 +369,25 @@ struct SerializedTarget<'a> {
     doctest: bool,
     /// Whether tests should be run for the target (`test` field in `Cargo.toml`)
     test: bool,
+    bench: bool,
+    harness: bool,
+    for_host: bool,
+    proc_macro: bool,
+    name_inferred: bool,
+    #[serde(rename = "rustdoc-scrape-examples", skip_serializing_if = "RustdocScrapeExamples::is_unset", default)]
+    doc_scrape_examples: RustdocScrapeExamples,
 }
 
 impl ser::Serialize for Target {
     fn serialize<S: ser::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let src_path = match self.src_path() {
-            TargetSourcePath::Path(p) => Some(p),
+            TargetSourcePath::Path(p) => Some(p.as_path()),
             // Unfortunately getting the correct path would require access to
             // target_dir, which is not available here.
             TargetSourcePath::Metabuild => None,
         };
         SerializedTarget {
-            kind: self.kind(),
+            kind: self.kind().clone().into(),
             crate_types: self.rustc_crate_types(),
             name: self.name(),
             src_path,
@@ -341,8 +398,70 @@ impl ser::Serialize for Target {
             doc: self.documented(),
             doctest: self.doctested() && self.doctestable(),
             test: self.tested(),
+            bench: self.benched(),
+            harness: self.harness(),
+            for_host: self.for_host(),
+            proc_macro: self.proc_macro(),
+            name_inferred: self.name_inferred(),
+            doc_scrape_examples: self.doc_scrape_examples(),
         }
         .serialize(s)
+    }
+}
+
+impl<'de> de::Deserialize<'de> for Target {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: de::Deserializer<'de>,
+    {
+        let target = SerializedTarget::deserialize(deserializer)?;
+        let edition = target.edition.parse().map_err(de::Error::custom)?;
+
+        let name = target.name;
+
+        let required_features = target
+            .required_features
+            .map(|rf| rf.into_iter().map(str::to_string).collect());
+
+        use SerializedTargetKind::*;
+        let mut result = match target.src_path.map(Path::to_path_buf) {
+            Some(src_path) => match target.kind {
+                Lib(crate_types) => Target::lib_target(name, crate_types, src_path, edition),
+                Bin => Target::bin_target(name, None, src_path, required_features, edition),
+                Test => Target::test_target(name, src_path, required_features, edition),
+                Bench => Target::bench_target(name, src_path, required_features, edition),
+                Example => Target::example_target(
+                    name,
+                    target.crate_types,
+                    src_path,
+                    required_features,
+                    edition,
+                ),
+                CustomBuild => Target::custom_build_target(name, src_path, edition),
+            },
+            None => match target.kind {
+                CustomBuild => Target::metabuild_target(name),
+                _ => {
+                    return Err(de::Error::custom(format!(
+                        "no src_path set for non-custom-build target"
+                    )))
+                }
+            },
+        };
+
+        // Set all fields that 
+        result
+            .set_name_inferred(target.name_inferred)
+            .set_for_host(target.for_host)
+            .set_proc_macro(target.proc_macro)
+            .set_doc(target.doc)
+            .set_doctest(target.doctest)
+            .set_tested(target.test)
+            .set_benched(target.bench)
+            .set_harness(target.harness)
+            .set_doc_scrape_examples(target.doc_scrape_examples);
+
+        Ok(result)
     }
 }
 
