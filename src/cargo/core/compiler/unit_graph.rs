@@ -3,14 +3,15 @@
 //! [`--unit-graph`]: https://doc.rust-lang.org/nightly/cargo/reference/unstable.html#unit-graph
 
 use crate::core::compiler::Unit;
-use crate::core::compiler::{CompileKind, CompileMode};
+use crate::core::compiler::{BuildContext, CompileKind, CompileMode, CompileTarget};
 use crate::core::profiles::{Profile, UnitFor};
 use crate::core::{PackageId, Target};
 use crate::util::interning::InternedString;
 use crate::util::CargoResult;
-use crate::GlobalContext;
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::io::Write;
+use std::path::Path;
 
 /// The dependency graph of Units.
 pub type UnitGraph = HashMap<Unit, Vec<UnitDep>>;
@@ -39,38 +40,49 @@ pub struct UnitDep {
 
 const VERSION: u32 = 1;
 
-#[derive(serde::Serialize)]
-struct SerializedUnitGraph<'a> {
-    version: u32,
-    units: Vec<SerializedUnit<'a>>,
-    roots: Vec<usize>,
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct SerializedUnitGraph {
+    pub version: u32,
+    pub units: Vec<SerializedUnit>,
+    pub roots: Vec<usize>,
 }
 
-#[derive(serde::Serialize)]
-struct SerializedUnit<'a> {
-    pkg_id: PackageId,
-    target: &'a Target,
-    profile: &'a Profile,
-    platform: CompileKind,
-    mode: CompileMode,
-    features: &'a Vec<InternedString>,
-    #[serde(skip_serializing_if = "std::ops::Not::not")] // hide for unstable build-std
-    is_std: bool,
-    dependencies: Vec<SerializedUnitDep>,
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct SerializedUnit {
+    pub pkg_id: PackageId,
+    pub target: Target,
+    pub profile: Profile,
+    pub platform: CompileKind,
+    pub mode: CompileMode,
+    pub features: Vec<InternedString>,
+    pub rustflags: Vec<String>,
+    pub rustdocflags: Vec<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not", default)] // hide for unstable build-std
+    pub is_std: bool,
+    pub dep_hash: u64,
+    pub artifact: bool,
+    pub artifact_target_for_features: Option<CompileTarget>,
+    pub extra_compiler_args: Vec<String>,
+    pub dependencies: Vec<SerializedUnitDep>,
 }
 
-#[derive(serde::Serialize)]
-struct SerializedUnitDep {
-    index: usize,
-    extern_crate_name: InternedString,
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct SerializedUnitDep {
+    pub index: usize,
+    pub extern_crate_name: InternedString,
     // This is only set on nightly since it is unstable.
     #[serde(skip_serializing_if = "Option::is_none")]
-    public: Option<bool>,
+    pub public: Option<bool>,
     // This is only set on nightly since it is unstable.
     #[serde(skip_serializing_if = "Option::is_none")]
-    noprelude: Option<bool>,
-    // Intentionally not including `unit_for` because it is a low-level
-    // internal detail that is mostly used for building the graph.
+    pub noprelude: Option<bool>,
+    pub dep_name: Option<InternedString>,
+    pub unit_for: UnitFor,
+}
+
+pub fn load_serialized_unit_graph(path: &Path) -> CargoResult<SerializedUnitGraph> {
+    let data = cargo_util::paths::read(path)?;
+    Ok(serde_json::from_str(&data)?)
 }
 
 /// Outputs a JSON serialization of [`UnitGraph`] for given `root_units`
@@ -78,7 +90,7 @@ struct SerializedUnitDep {
 pub fn emit_serialized_unit_graph(
     root_units: &[Unit],
     unit_graph: &UnitGraph,
-    gctx: &GlobalContext,
+    bcx: &BuildContext<'_, '_>,
 ) -> CargoResult<()> {
     let mut units: Vec<(&Unit, &Vec<UnitDep>)> = unit_graph.iter().collect();
     units.sort_unstable();
@@ -92,11 +104,11 @@ pub fn emit_serialized_unit_graph(
     let ser_units = units
         .iter()
         .map(|(unit, unit_deps)| {
-            let dependencies = unit_deps
+            let dependencies: Vec<SerializedUnitDep> = unit_deps
                 .iter()
                 .map(|unit_dep| {
                     // https://github.com/rust-lang/rust/issues/64260 when stabilized.
-                    let (public, noprelude) = if gctx.nightly_features_allowed {
+                    let (public, noprelude) = if bcx.gctx.nightly_features_allowed {
                         (Some(unit_dep.public), Some(unit_dep.noprelude))
                     } else {
                         (None, None)
@@ -106,17 +118,32 @@ pub fn emit_serialized_unit_graph(
                         extern_crate_name: unit_dep.extern_crate_name,
                         public,
                         noprelude,
+                        dep_name: unit_dep.dep_name,
+                        unit_for: unit_dep.unit_for,
                     }
                 })
                 .collect();
+
+            let extra_compiler_args = bcx
+                .extra_compiler_args
+                .get(unit)
+                .cloned()
+                .unwrap_or_default();
+
             SerializedUnit {
                 pkg_id: unit.pkg.package_id(),
-                target: &unit.target,
-                profile: &unit.profile,
+                target: unit.target.clone(),
+                profile: unit.profile.clone(),
                 platform: unit.kind,
                 mode: unit.mode,
-                features: &unit.features,
+                features: unit.features.clone(),
+                rustflags: unit.rustflags.to_vec(),
+                rustdocflags: unit.rustdocflags.to_vec(),
                 is_std: unit.is_std,
+                dep_hash: unit.dep_hash,
+                artifact: unit.artifact.is_true(),
+                artifact_target_for_features: unit.artifact_target_for_features,
+                extra_compiler_args,
                 dependencies,
             }
         })

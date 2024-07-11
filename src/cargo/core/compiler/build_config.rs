@@ -4,7 +4,7 @@ use crate::util::interning::InternedString;
 use crate::util::{CargoResult, GlobalContext, RustfixDiagnosticServer};
 use anyhow::{bail, Context as _};
 use cargo_util::ProcessBuilder;
-use serde::ser;
+use serde::{de, ser};
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -204,6 +204,32 @@ impl ser::Serialize for CompileMode {
             Docscrape => "docscrape".serialize(s),
             RunCustomBuild => "run-custom-build".serialize(s),
         }
+    }
+}
+
+impl<'de> de::Deserialize<'de> for CompileMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: de::Deserializer<'de>,
+    {
+        let s = <&str>::deserialize(deserializer)?;
+        
+        // TODO(joergw): Handle flags for `check` and `doc`
+        use self::CompileMode::*;
+        Ok(match s {
+            "test" => Test,
+            "build" => Build,
+            "check" => Check { test: false },
+            "bench" => Bench,
+            "doc" => Doc {
+                deps: false,
+                json: false,
+            },
+            "doctest" => Doctest,
+            "docscrape" => Docscrape,
+            "run-custom-build" => RunCustomBuild,
+            _ => return Err(de::Error::custom("unknown compile mode")),
+        })
     }
 }
 

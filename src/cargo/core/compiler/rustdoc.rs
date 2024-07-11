@@ -6,6 +6,7 @@ use crate::core::compiler::{BuildContext, CompileKind};
 use crate::sources::CRATES_IO_REGISTRY;
 use crate::util::errors::{internal, CargoResult};
 use cargo_util::ProcessBuilder;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
@@ -272,10 +273,13 @@ pub fn add_output_format(
 /// [`-Zrustdoc-scrape-examples`][1].
 ///
 /// [1]: https://doc.rust-lang.org/nightly/cargo/reference/unstable.html#scrape-examples
-#[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Debug, Copy)]
+#[derive(
+    Clone, Hash, PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Default, Serialize, Deserialize,
+)]
 pub enum RustdocScrapeExamples {
     Enabled,
     Disabled,
+    #[default]
     Unset,
 }
 
