@@ -287,6 +287,37 @@ impl<'gctx> Workspace<'gctx> {
         Ok(ws)
     }
 
+    pub fn rootless(gctx: &'gctx GlobalContext) -> CargoResult<Workspace<'gctx>> {
+        let target_dir = gctx
+            .target_dir()?
+            .unwrap_or_else(|| Filesystem::new(Path::join(gctx.cwd(), "target")));
+        
+        let ws = Workspace {
+            gctx,
+            // TODO: This is used to get the workspace root for hashing, etc. Review usages of the root.
+            // Make it optional and allow specifying the root explicitly?
+            current_manifest: Path::join(gctx.cwd(), "Cargo.toml"),
+            packages: Packages {
+                gctx,
+                packages: HashMap::new(),
+            },
+            root_manifest: None,
+            target_dir: Some(target_dir),
+            members: Vec::new(),
+            member_ids: HashSet::new(),
+            default_members: Vec::new(),
+            is_ephemeral: true,
+            require_optional_deps: false,
+            loaded_packages: RefCell::new(HashMap::new()),
+            ignore_lock: false,
+            resolve_behavior: ResolveBehavior::V1, // Resolving is not supported
+            resolve_honors_rust_version: false,
+            custom_metadata: None,
+            local_overlays: HashMap::new(),
+        };
+        Ok(ws)
+    }
+
     fn set_resolve_behavior(&mut self) -> CargoResult<()> {
         // - If resolver is specified in the workspace definition, use that.
         // - If the root package specifies the resolver, use that.

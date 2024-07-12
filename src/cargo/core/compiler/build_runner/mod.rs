@@ -323,7 +323,7 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
 
     #[tracing::instrument(skip_all)]
     pub fn prepare_units(&mut self) -> CargoResult<()> {
-        let dest = self.bcx.profiles.get_dir_name();
+        let dest = self.bcx.profiles.dir_name;
         let host_layout = Layout::new(self.bcx.ws, None, &dest)?;
         let mut targets = HashMap::new();
         for kind in self.bcx.all_kinds.iter() {

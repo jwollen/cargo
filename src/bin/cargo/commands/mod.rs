@@ -5,6 +5,7 @@ pub fn builtin() -> Vec<Command> {
         add::cli(),
         bench::cli(),
         build::cli(),
+        build_unit_graph::cli(),
         check::cli(),
         clean::cli(),
         config::cli(),
@@ -51,6 +52,7 @@ pub fn builtin_exec(cmd: &str) -> Option<Exec> {
         "add" => add::exec,
         "bench" => bench::exec,
         "build" => build::exec,
+        "build-unit-graph" => build_unit_graph::exec,
         "check" => check::exec,
         "clean" => clean::exec,
         "config" => config::exec,
@@ -95,6 +97,7 @@ pub fn builtin_exec(cmd: &str) -> Option<Exec> {
 pub mod add;
 pub mod bench;
 pub mod build;
+pub mod build_unit_graph;
 pub mod check;
 pub mod clean;
 pub mod config;
