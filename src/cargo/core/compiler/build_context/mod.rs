@@ -2,7 +2,7 @@
 
 use crate::core::compiler::unit_graph::UnitGraph;
 use crate::core::compiler::{BuildConfig, CompileKind, Unit};
-use crate::core::profiles::Profiles;
+use crate::core::profiles::RequestedProfileInfo;
 use crate::core::PackageSet;
 use crate::core::Workspace;
 use crate::util::context::GlobalContext;
@@ -27,7 +27,7 @@ pub use self::target_info::{
 /// As a result, almost every field on `BuildContext` is public, including
 ///
 /// * a resolved [`UnitGraph`] of your dependencies,
-/// * a [`Profiles`] containing compiler flags presets,
+/// * a [`RequestedProfileInfo`] containing compiler flags presets,
 /// * a [`RustcTargetData`] containing host and target platform information,
 /// * and a [`PackageSet`] for further package downloads,
 ///
@@ -50,8 +50,8 @@ pub struct BuildContext<'a, 'gctx> {
     /// The cargo context.
     pub gctx: &'gctx GlobalContext,
 
-    /// This contains a collection of compiler flags presets.
-    pub profiles: Profiles,
+    /// Information about the profile being built.
+    pub profiles: RequestedProfileInfo,
 
     /// Configuration information for a rustc build.
     pub build_config: &'a BuildConfig,
@@ -85,7 +85,7 @@ impl<'a, 'gctx> BuildContext<'a, 'gctx> {
         ws: &'a Workspace<'gctx>,
         packages: PackageSet<'gctx>,
         build_config: &'a BuildConfig,
-        profiles: Profiles,
+        profiles: RequestedProfileInfo,
         extra_compiler_args: HashMap<Unit, Vec<String>>,
         target_data: RustcTargetData<'gctx>,
         roots: Vec<Unit>,

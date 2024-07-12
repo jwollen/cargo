@@ -8,7 +8,8 @@ use crate::core::profiles::{Profile, UnitFor};
 use crate::core::{PackageId, Target};
 use crate::util::interning::InternedString;
 use crate::util::CargoResult;
-use std::collections::HashMap;
+use crate::GlobalContext;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::io::Write;
 use std::path::Path;
@@ -80,9 +81,14 @@ pub struct SerializedUnitDep {
     pub unit_for: UnitFor,
 }
 
-pub fn load_serialized_unit_graph(path: &Path) -> CargoResult<SerializedUnitGraph> {
+pub fn load_serialized_unit_graph(
+    gctx: &GlobalContext,
+    path: &Path,
+) -> CargoResult<SerializedUnitGraph> {
     let data = cargo_util::paths::read(path)?;
-    Ok(serde_json::from_str(&data)?)
+    let mut unit_graph: SerializedUnitGraph = serde_json::from_str(&data)?;
+    unit_graph.validate(gctx)?;
+    Ok(unit_graph)
 }
 
 /// Outputs a JSON serialization of [`UnitGraph`] for given `root_units`
@@ -159,4 +165,62 @@ pub fn emit_serialized_unit_graph(
     serde_json::to_writer(&mut lock, &s)?;
     drop(writeln!(lock));
     Ok(())
+}
+
+impl SerializedUnitGraph {
+    fn validate(&mut self, gctx: &GlobalContext) -> CargoResult<()> {
+        // Collect used units
+        // TODO: Check for cycles
+        let mut used_units = HashSet::with_capacity(self.units.len());
+        let mut to_visit = self.roots.clone();
+        while let Some(index) = to_visit.pop() {
+            if index >= self.units.len() {
+                anyhow::bail!(
+                    "unit graph has a dependency on unit #{} but contains only {} units",
+                    index,
+                    used_units.len(),
+                );
+            }
+
+            if used_units.insert(index) {
+                to_visit.extend(self.units[index].dependencies.iter().map(|dep| dep.index));
+            }
+        }
+
+        // Report and remove unused units
+        if used_units.len() != self.units.len() {
+            // Maintain the original order
+            let mut used_units: Vec<_> = used_units.into_iter().collect();
+            used_units.sort_unstable();
+
+            let index_map: HashMap<_, _> = used_units
+                .into_iter()
+                .enumerate()
+                .map(|(new, old)| (old, new))
+                .collect();
+
+            let mut units = Vec::with_capacity(index_map.len());
+            std::mem::swap(&mut self.units, &mut units);
+
+            for (index, mut unit) in units.into_iter().enumerate() {
+                if index_map.contains_key(&index) {
+                    for dep in &mut unit.dependencies {
+                        dep.index = index_map[&dep.index];
+                    }
+                    self.units.push(unit);
+                } else {
+                    gctx.shell().warn(format!(
+                        "unit #{} ({}) is not a dependency of a root unit and will be ignored",
+                        index, unit.pkg_id
+                    ))?;
+                }
+            }
+
+            for root in &mut self.roots {
+                *root = index_map[root];
+            }
+        }
+
+        Ok(())
+    }
 }

@@ -37,24 +37,29 @@
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use std::path::Path;
 use std::sync::Arc;
 
-use crate::core::compiler::unit_dependencies::build_unit_dependencies;
+use crate::core::compiler::unit_dependencies::{build_unit_dependencies, IsArtifact};
 use crate::core::compiler::unit_graph::{self, UnitDep, UnitGraph};
 use crate::core::compiler::{standard_lib, CrateType, TargetInfo};
 use crate::core::compiler::{BuildConfig, BuildContext, BuildRunner, Compilation};
 use crate::core::compiler::{CompileKind, CompileMode, CompileTarget, RustcTargetData, Unit};
 use crate::core::compiler::{DefaultExecutor, Executor, UnitInterner};
-use crate::core::profiles::Profiles;
+use crate::core::profiles::{Profiles, RequestedProfileInfo};
+use crate::core::registry::PackageRegistry;
 use crate::core::resolver::features::{self, CliFeatures, FeaturesFor};
 use crate::core::resolver::{HasDevUnits, Resolve};
 use crate::core::{PackageId, PackageSet, SourceId, TargetKind, Workspace};
 use crate::drop_println;
 use crate::ops;
 use crate::ops::resolve::WorkspaceResolve;
+use crate::sources::SourceConfigMap;
 use crate::util::context::GlobalContext;
 use crate::util::interning::InternedString;
 use crate::util::{CargoResult, StableHasher};
+
+use itertools::Itertools;
 
 mod compile_filter;
 pub use compile_filter::{CompileFilter, FilterRule, LibRule};
@@ -157,6 +162,170 @@ pub fn compile_ws<'a>(
     crate::core::gc::auto_gc(bcx.gctx);
     let build_runner = BuildRunner::new(&bcx)?;
     build_runner.compile(exec)
+}
+
+pub fn compile_unit_graph<'a>(
+    gctx: &'a GlobalContext,
+    compile_opts: CompileOptions,
+    path: &Path,
+) -> CargoResult<Compilation<'a>> {
+    let exec: Arc<dyn Executor> = Arc::new(DefaultExecutor);
+    let unit_graph = unit_graph::load_serialized_unit_graph(gctx, path)?;
+    compile_unit_graph_with_exec(gctx, compile_opts, unit_graph, &exec)
+}
+
+#[tracing::instrument(skip_all)]
+pub fn compile_unit_graph_with_exec<'a>(
+    gctx: &'a GlobalContext,
+    compile_opts: CompileOptions,
+    ser_unit_graph: unit_graph::SerializedUnitGraph,
+    exec: &Arc<dyn Executor>,
+) -> CargoResult<Compilation<'a>> {
+    let ws = Workspace::rootless(gctx)?;
+
+    // TODO: Assumed-fresh units don't need actual packages?
+    let package_ids: Vec<_> = ser_unit_graph
+        .units
+        .iter()
+        .map(|unit| unit.pkg_id)
+        .collect();
+
+    let mut registry =
+        PackageRegistry::new_with_source_config(&gctx, SourceConfigMap::new(&gctx)?)?;
+    registry.add_sources(package_ids.iter().map(|package_id| package_id.source_id()))?;
+
+    let packages = registry.get(&package_ids)?;
+
+    let mut flags: HashSet<Arc<[String]>> = HashSet::new();
+    let mut get_or_insert_flags = |f: Vec<String>| {
+        if !flags.contains(f.as_slice()) {
+            let f: Arc<[_]> = f.into();
+            flags.insert(f.clone());
+            f
+        } else {
+            flags.get(f.as_slice()).unwrap().clone()
+        }
+    };
+
+    let mut extra_compiler_args = HashMap::new();
+
+    let interner = UnitInterner::new();
+    let (units, deps): (Vec<_>, Vec<_>) = ser_unit_graph
+        .units
+        .into_iter()
+        .map(|serialized_unit| {
+            let pkg = packages.get_one(serialized_unit.pkg_id).unwrap();
+
+            let artifact = if serialized_unit.artifact {
+                IsArtifact::Yes
+            } else {
+                IsArtifact::No
+            };
+
+            let unit = interner.intern(
+                pkg,
+                &serialized_unit.target,
+                serialized_unit.profile.clone(),
+                serialized_unit.platform,
+                serialized_unit.mode,
+                serialized_unit.features,
+                get_or_insert_flags(serialized_unit.rustflags),
+                get_or_insert_flags(serialized_unit.rustdocflags),
+                serialized_unit.is_std,
+                serialized_unit.dep_hash,
+                artifact,
+                serialized_unit.artifact_target_for_features,
+            );
+
+            if !serialized_unit.extra_compiler_args.is_empty() {
+                extra_compiler_args.insert(unit.clone(), serialized_unit.extra_compiler_args);
+            }
+
+            (unit, serialized_unit.dependencies)
+        })
+        .multiunzip();
+
+    let unit_graph: UnitGraph = units
+        .iter()
+        .zip(deps)
+        .map(|(unit, deps)| {
+            let deps = deps
+                .into_iter()
+                .map(|dep| UnitDep {
+                    unit: units[dep.index].clone(),
+                    extern_crate_name: dep.extern_crate_name.clone(),
+                    public: dep.public.unwrap_or_default(),
+                    noprelude: dep.noprelude.unwrap_or_default(),
+                    unit_for: dep.unit_for,
+                    dep_name: dep.dep_name,
+                })
+                .collect();
+            (unit.clone(), deps)
+        })
+        .collect();
+
+    let roots = ser_unit_graph
+        .roots
+        .iter()
+        .map(|root| units[*root].clone())
+        .collect();
+
+    let CompileOptions {
+        mut build_config, ..
+    } = compile_opts;
+
+    // Currently the compile mode is only used in `is_doc` during actual doc compilation
+    // (and can probably computed differently there). All other uses are for unit graph construction,
+    // so we create a placeholder here.
+    // TODO: This should be determined by the cargo command for graph execution.
+    build_config.mode = if unit_graph.keys().any(|unit| unit.mode.is_doc()) {
+        CompileMode::Doc {
+            deps: false,
+            json: false,
+        }
+    } else {
+        CompileMode::Build
+    };
+
+    let scrape_units = unit_graph
+        .keys()
+        .filter(|unit| unit.mode == CompileMode::Docscrape)
+        .cloned()
+        .collect();
+
+    //let build_config = &BuildConfig::new(gctx, None, false, &[], compile_mode)?;
+    let target_data = RustcTargetData::new(&ws, &build_config.requested_kinds)?;
+
+    let root = &units[ser_unit_graph.roots[0]];
+
+    // TODO: The requested profile is only needed for the dir name, and the base profile (for console output).
+    // However neither make sense for a partial unit graph und should be derived directly in units.
+    let dir_name = match root.profile.name.as_str() {
+        "dev" | "test" => "debug".into(),
+        "bench" => "release".into(),
+        _ => root.profile.name.clone(),
+    };
+
+    let profiles = RequestedProfileInfo {
+        dir_name,
+        profile: root.profile.clone(),
+    };
+
+    let bcx = BuildContext::new(
+        &ws,
+        packages,
+        &build_config,
+        profiles,
+        extra_compiler_args,
+        target_data,
+        roots,
+        unit_graph,
+        scrape_units,
+    )?;
+
+    crate::core::gc::auto_gc(bcx.gctx);
+    let build_runner = BuildRunner::new(&bcx)?;
+    return build_runner.compile(exec);
 }
 
 /// Executes `rustc --print <VALUE>`.
@@ -526,6 +695,11 @@ where `<compatible-ver>` is the latest version supporting rustc {rustc_version}"
             return Err(anyhow::Error::msg(message));
         }
     }
+
+    let profiles = RequestedProfileInfo {
+        dir_name: profiles.get_dir_name(),
+        profile: profiles.base_profile(),
+    };
 
     let bcx = BuildContext::new(
         ws,

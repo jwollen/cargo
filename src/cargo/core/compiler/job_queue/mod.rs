@@ -796,7 +796,7 @@ impl<'gctx> DrainState<'gctx> {
         // list of Units built, and maybe display a list of the different
         // profiles used. However, to keep it simple and compatible with old
         // behavior, we just display what the base profile is.
-        let profile = build_runner.bcx.profiles.base_profile();
+        let profile = &build_runner.bcx.profiles.profile;
         let mut opt_type = String::from(if profile.opt_level.as_str() == "0" {
             "unoptimized"
         } else {
