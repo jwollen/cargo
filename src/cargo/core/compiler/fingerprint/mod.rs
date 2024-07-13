@@ -409,6 +409,10 @@ pub fn prepare_target(
     unit: &Unit,
     force: bool,
 ) -> CargoResult<Job> {
+    if unit.skip_freshness_check {
+        return Ok(Job::new_fresh());
+    }
+
     let bcx = build_runner.bcx;
     let loc = build_runner.files().fingerprint_file_path(unit, "");
 

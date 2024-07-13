@@ -64,6 +64,7 @@ pub struct SerializedUnit {
     pub artifact: bool,
     pub artifact_target_for_features: Option<CompileTarget>,
     pub extra_compiler_args: Vec<String>,
+    pub skip_freshness_check: bool,
     pub dependencies: Vec<SerializedUnitDep>,
 }
 
@@ -150,6 +151,7 @@ pub fn emit_serialized_unit_graph(
                 artifact: unit.artifact.is_true(),
                 artifact_target_for_features: unit.artifact_target_for_features,
                 extra_compiler_args,
+                skip_freshness_check: unit.skip_freshness_check,
                 dependencies,
             }
         })

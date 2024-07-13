@@ -177,6 +177,7 @@ impl<'a> UnitGenerator<'a, '_> {
                     /*dep_hash*/ 0,
                     IsArtifact::No,
                     None,
+                    false,
                 )
             })
             .collect()

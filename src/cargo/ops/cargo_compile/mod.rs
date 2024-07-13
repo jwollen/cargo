@@ -235,6 +235,7 @@ pub fn compile_unit_graph_with_exec<'a>(
                 serialized_unit.dep_hash,
                 artifact,
                 serialized_unit.artifact_target_for_features,
+                serialized_unit.skip_freshness_check,
             );
 
             if !serialized_unit.extra_compiler_args.is_empty() {
@@ -876,6 +877,7 @@ fn traverse_and_share(
             unit.dep_hash,
             unit.artifact,
             unit.artifact_target_for_features,
+            false,
         );
 
         // We can now turn the deferred value into its actual final value.
@@ -905,6 +907,7 @@ fn traverse_and_share(
         // Since `dep_hash` is now filled in, there's no need to specify the artifact target
         // for target-dependent feature resolution
         None,
+        false,
     );
     assert!(memo.insert(unit.clone(), new_unit.clone()).is_none());
     new_graph.entry(new_unit.clone()).or_insert(new_deps);
@@ -1066,6 +1069,7 @@ fn override_rustc_crate_types(
             unit.dep_hash,
             unit.artifact,
             unit.artifact_target_for_features,
+            false,
         )
     };
     units[0] = match unit.target.kind() {
