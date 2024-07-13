@@ -174,6 +174,7 @@ pub fn generate_std_roots(
                 /*dep_hash*/ 0,
                 IsArtifact::No,
                 None,
+                false,
             ));
         }
     }
