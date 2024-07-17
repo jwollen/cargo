@@ -298,6 +298,7 @@ pub fn compile_unit_graph_with_exec<'a>(
     let target_data = RustcTargetData::new(&ws, &build_config.requested_kinds)?;
 
     let root = &units[ser_unit_graph.roots[0]];
+    build_config.uplift_roots = false;
 
     // TODO: The requested profile is only needed for the dir name, and the base profile (for console output).
     // However neither make sense for a partial unit graph und should be derived directly in units.

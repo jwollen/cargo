@@ -111,6 +111,8 @@ pub struct CompilationFiles<'a, 'gctx> {
     metas: HashMap<Unit, MetaInfo>,
     /// For each Unit, a list all files produced.
     outputs: HashMap<Unit, LazyCell<Arc<Vec<OutputFile>>>>,
+
+    uplift_roots: bool,
 }
 
 /// Info about a single file emitted by the compiler.
@@ -160,6 +162,7 @@ impl<'a, 'gctx: 'a> CompilationFiles<'a, 'gctx> {
             roots: build_runner.bcx.roots.clone(),
             metas,
             outputs,
+            uplift_roots: build_runner.bcx.build_config.uplift_roots,
         }
     }
 
@@ -403,7 +406,7 @@ impl<'a, 'gctx: 'a> CompilationFiles<'a, 'gctx> {
         if !unit.target.is_bin()
             && !unit.target.is_custom_build()
             && file_type.crate_type != Some(CrateType::Dylib)
-            && !self.roots.contains(unit)
+            && (!self.roots.contains(unit) || !self.uplift_roots)
         {
             return None;
         }
