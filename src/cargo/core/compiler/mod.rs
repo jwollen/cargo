@@ -331,10 +331,13 @@ fn rustc(
     }
 
     return Ok(Work::new(move |state| {
-        // Artifacts are in a different location than typical units,
-        // hence we must assure the crate- and target-dependent
+        // Artifacts are in a different location than typical units.
+        // We must assure the crate- and target-dependent
         // directory is present.
-        if artifact.is_true() {
+        // Custom-build directories get usually created along with their nested "out"
+        // directory by their run-custom-build job, but not if the custom-build is
+        // the root of a unit graph.
+        if artifact.is_true() || target.is_custom_build() {
             paths::create_dir_all(&root)?;
         }
 
