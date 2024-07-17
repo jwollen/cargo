@@ -46,6 +46,8 @@ pub struct BuildConfig {
     pub future_incompat_report: bool,
     /// Which kinds of build timings to output (empty if none).
     pub timing_outputs: Vec<TimingOutput>,
+
+    pub uplift_roots: bool,
 }
 
 fn default_parallelism() -> CargoResult<u32> {
@@ -117,6 +119,7 @@ impl BuildConfig {
             export_dir: None,
             future_incompat_report: false,
             timing_outputs: Vec::new(),
+            uplift_roots: true,
         })
     }
 
