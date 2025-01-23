@@ -38,6 +38,7 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::core::compiler::unit_dependencies::{build_unit_dependencies, IsArtifact};
@@ -196,10 +197,10 @@ pub fn compile_unit_graph_with_exec<'a>(
 
     let packages = registry.get(&package_ids)?;
 
-    let mut flags: HashSet<Arc<[String]>> = HashSet::new();
+    let mut flags: HashSet<Rc<[String]>> = HashSet::new();
     let mut get_or_insert_flags = |f: Vec<String>| {
         if !flags.contains(f.as_slice()) {
-            let f: Arc<[_]> = f.into();
+            let f: Rc<[_]> = f.into();
             flags.insert(f.clone());
             f
         } else {
@@ -231,6 +232,7 @@ pub fn compile_unit_graph_with_exec<'a>(
                 serialized_unit.features,
                 get_or_insert_flags(serialized_unit.rustflags),
                 get_or_insert_flags(serialized_unit.rustdocflags),
+                Default::default(), // TODO
                 serialized_unit.is_std,
                 serialized_unit.dep_hash,
                 artifact,

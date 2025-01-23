@@ -312,6 +312,7 @@ impl<'gctx> Workspace<'gctx> {
             ignore_lock: false,
             resolve_behavior: ResolveBehavior::V1, // Resolving is not supported
             resolve_honors_rust_version: false,
+            requested_lockfile_path: None, // TODO
             custom_metadata: None,
             local_overlays: HashMap::new(),
         };
